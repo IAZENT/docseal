@@ -16,11 +16,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .admin_panel import AdminPanel
 from .auth import AuthenticationManager
 from .ca_manager import CertificateAuthority
 from .ca_tabs import InitializeCATab, IssueCATab, RevokeCATab
 from .dashboard import DashboardTab
+from .demo_mode import DemoSetup
+from .error_handler import ErrorHandler
 from .login_screen import LoginScreen
+from .modern_themes import DARK_THEME, LIGHT_THEME
 from .tabs import (
     DecryptTab,
     DecryptVerifyTab,
@@ -226,6 +230,46 @@ class MainWindow(QMainWindow):
         layout.addWidget(theme_combo)
         self.theme_combo = theme_combo
 
+        # Check if user is admin
+        user = self.auth_manager.get_current_user()
+        if user and user.role == "admin":
+            admin_btn = QPushButton("👤 User Management")
+            admin_btn.setMinimumHeight(50)
+            admin_btn.setToolTip("Manage users (Admin Only)")
+            admin_btn.clicked.connect(self._show_admin_panel)
+            self.sidebar_buttons.append(admin_btn)
+            layout.addWidget(admin_btn)
+
+            demo_btn = QPushButton("🎬 Demo Mode")
+            demo_btn.setMinimumHeight(50)
+            demo_btn.setToolTip("Setup demo for presentations")
+            demo_btn.clicked.connect(self._show_demo_setup)
+            self.demo_btn = demo_btn
+            self.sidebar_buttons.append(demo_btn)
+            layout.addWidget(demo_btn)
+            
+            # Demo mode off button (initially hidden)
+            demo_off_btn = QPushButton("⏹️ Demo Mode Off")
+            demo_off_btn.setMinimumHeight(50)
+            demo_off_btn.setToolTip("Disable demo mode")
+            demo_off_btn.clicked.connect(self._disable_demo_mode)
+            demo_off_btn.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #ff6b6b;
+                    color: white;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #ff5252;
+                }
+            """
+            )
+            self.demo_off_btn = demo_off_btn
+            self.sidebar_buttons.append(demo_off_btn)
+            layout.addWidget(demo_off_btn)
+            demo_off_btn.hide()  # Initially hidden
+
         # Navigation buttons
         buttons = [
             ("Dashboard", 0, "Overview and status"),
@@ -303,31 +347,165 @@ class MainWindow(QMainWindow):
         self.login_screen = LoginScreen(self.auth_manager, self._on_login_success)
         self.setCentralWidget(self.login_screen)
 
+    def _show_admin_panel(self) -> None:
+        """Show the admin panel for user management."""
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout
+            # Create a dialog wrapper for the admin panel
+            dialog = QDialog(self)
+            dialog.setWindowTitle("User Management")
+            dialog.setGeometry(100, 100, 900, 600)
+            layout = QVBoxLayout()
+            admin_panel = AdminPanel(self.auth_manager)
+            layout.addWidget(admin_panel)
+            dialog.setLayout(layout)
+            dialog.exec()
+        except Exception as e:
+            ErrorHandler.handle_exception(e, "Admin Panel Error", parent=self)
+
+    def _show_demo_setup(self) -> None:
+        """Show demo mode setup dialog."""
+        try:
+            demo_setup = DemoSetup()
+            demo_setup.enable_demo_mode()
+            
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtGui import QFont
+            
+            # Show demo mode off button
+            if hasattr(self, 'demo_off_btn'):
+                self.demo_off_btn.show()
+            if hasattr(self, 'demo_btn'):
+                self.demo_btn.hide()
+            
+            # Re-check demo mode in all tabs and auto-load files
+            if hasattr(self, 'sign_tab') and self.sign_tab:
+                self.sign_tab._check_demo_mode()
+            if hasattr(self, 'verify_tab') and self.verify_tab:
+                self.verify_tab._check_demo_mode()
+            if hasattr(self, 'encrypt_tab') and self.encrypt_tab:
+                self.encrypt_tab._check_demo_mode()
+            if hasattr(self, 'decrypt_tab') and self.decrypt_tab:
+                self.decrypt_tab._check_demo_mode()
+            if hasattr(self, 'sign_encrypt_tab') and self.sign_encrypt_tab:
+                self.sign_encrypt_tab._check_demo_mode()
+            if hasattr(self, 'decrypt_verify_tab') and self.decrypt_verify_tab:
+                self.decrypt_verify_tab._check_demo_mode()
+            
+            # Create demo setup dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Demo Mode Setup")
+            dialog.setGeometry(200, 200, 500, 400)
+            
+            layout = QVBoxLayout()
+            
+            title = QLabel("✅ Demo Mode Enabled!")
+            title_font = QFont()
+            title_font.setPointSize(14)
+            title_font.setBold(True)
+            title.setFont(title_font)
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(title)
+            
+            info = QLabel(
+                "Demo mode has been enabled with:\n\n"
+                "✓ Demo directory structure created\n"
+                "✓ Sample document: data/documents/sample_document.txt\n"
+                "✓ Quick workflows available\n"
+                "✓ Ready for video presentations\n\n"
+                "You can now use the sample document for testing."
+            )
+            info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            info.setStyleSheet("font-size: 11pt; line-height: 1.5;")
+            layout.addWidget(info)
+            
+            layout.addStretch()
+            
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(dialog.accept)
+            layout.addWidget(close_btn)
+            
+            dialog.setLayout(layout)
+            dialog.exec()
+            
+        except Exception as e:
+            ErrorHandler.handle_exception(e, "Demo Setup Error", parent=self)
+    
+    def _disable_demo_mode(self) -> None:
+        """Disable demo mode."""
+        try:
+            demo_setup = DemoSetup()
+            demo_setup.disable_demo_mode()
+            
+            from PyQt6.QtWidgets import QMessageBox
+            
+            # Clear all tabs when demo is disabled
+            if hasattr(self, 'sign_tab') and self.sign_tab:
+                self.sign_tab._clear_fields()
+            if hasattr(self, 'verify_tab') and self.verify_tab:
+                self.verify_tab._clear_fields()
+            if hasattr(self, 'encrypt_tab') and self.encrypt_tab:
+                self.encrypt_tab._clear_fields()
+            if hasattr(self, 'decrypt_tab') and self.decrypt_tab:
+                self.decrypt_tab._clear_fields()
+            if hasattr(self, 'sign_encrypt_tab') and self.sign_encrypt_tab:
+                self.sign_encrypt_tab._clear_fields()
+            if hasattr(self, 'decrypt_verify_tab') and self.decrypt_verify_tab:
+                self.decrypt_verify_tab._clear_fields()
+            
+            # Hide demo off button and show demo button
+            if hasattr(self, 'demo_off_btn'):
+                self.demo_off_btn.hide()
+            if hasattr(self, 'demo_btn'):
+                self.demo_btn.show()
+            
+            QMessageBox.information(
+                self, 
+                "Demo Mode Disabled", 
+                "Demo mode has been disabled.\n\n"
+                "You can now use the application normally."
+            )
+        except Exception as e:
+            ErrorHandler.handle_exception(e, "Demo Disable Error", parent=self)
+
     def _refresh_sidebar_styles(self) -> None:
         """Apply theme-consistent styles to sidebar buttons."""
         if not hasattr(self, "sidebar_buttons"):
             return
         for btn in self.sidebar_buttons:
-            btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: {self._theme.secondary_bg};
-                    border: none;
-                    text-align: left;
-                    padding: 10px 15px;
-                    font-size: 10pt;
-                    color: {self._theme.primary_text};
-                }}
-                QPushButton:hover {{
-                    background-color: {self._theme.button_hover};
-                    color: {self._theme.button_text};
-                }}
-                QPushButton:pressed {{
-                    background-color: {self._theme.button_pressed};
-                    color: {self._theme.button_text};
-                }}
-            """
-            )
+            # Skip if button has been deleted
+            try:
+                if not btn or btn.isHidden():
+                    continue
+            except RuntimeError:
+                # Button was deleted, skip it
+                continue
+            
+            try:
+                btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background-color: {self._theme.secondary_bg};
+                        border: none;
+                        text-align: left;
+                        padding: 10px 15px;
+                        font-size: 10pt;
+                        color: {self._theme.primary_text};
+                    }}
+                    QPushButton:hover {{
+                        background-color: {self._theme.button_hover};
+                        color: {self._theme.button_text};
+                    }}
+                    QPushButton:pressed {{
+                        background-color: {self._theme.button_pressed};
+                        color: {self._theme.button_text};
+                    }}
+                """
+                )
+            except RuntimeError:
+                # Button was deleted, skip it
+                continue
 
     def _restyle_sidebar_shell(self) -> None:
         """Refresh sidebar container/title/footer colors when theme changes."""

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .ca_manager import CertificateAuthority
+from .logger_widget import LoggerWidget, LogLevel
 from .service_wrapper import GUIDocSealService
 
 
@@ -29,6 +30,7 @@ class WorkerThread(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
     success = pyqtSignal(str)
+    progress = pyqtSignal(str)  # For progress updates
 
     def __init__(self, operation, *args, parent=None, **kwargs):
         super().__init__(parent)
@@ -40,6 +42,7 @@ class WorkerThread(QThread):
     def run(self):
         """Run the operation."""
         try:
+            self.progress.emit("Processing...")
             result = self.operation(*self.args, **self.kwargs)
             if result:
                 self.success.emit(str(result))
@@ -58,7 +61,70 @@ class SignTab(QWidget):
         super().__init__()
         self.service = GUIDocSealService()
         self.ca_manager = ca_manager
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo files in demo mode."""
+        try:
+            from .demo_mode import DemoSetup
+            demo = DemoSetup()
+            result = demo.enable_demo_mode()
+            
+            # Auto-load sample document
+            if result.get('sample_document'):
+                self.document_path.setText(result['sample_document'])
+            
+            # Auto-load certificates if available
+            certs_dir = Path('data/certs')
+            keys_dir = Path('data/keys')
+            
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    self.cert_path.setText(str(certs[0]))
+            
+            if keys_dir.exists():
+                keys = sorted(keys_dir.glob('*.pem'))
+                if keys:
+                    self.key_path.setText(str(keys[0]))
+            
+            # Auto-generate output path
+            if self.document_path.text():
+                doc_path = Path(self.document_path.text())
+                output = doc_path.parent / f"{doc_path.stem}.signed.dseal"
+                self.output_path.setText(str(output))
+        except Exception:
+            pass
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.document_path.setText("")
+        self.key_path.setText("")
+        self.cert_path.setText("")
+        self.output_path.setText("")
+        self.description.clear()
 
     def init_ui(self):
         """Initialize the UI."""
@@ -117,10 +183,13 @@ class SignTab(QWidget):
         sign_btn.clicked.connect(self._sign)
         layout.addWidget(sign_btn)
 
-        # Status
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
+
+        # Status (removed - now using logger)
         self.status = QLabel("Ready to sign documents")
         self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -228,12 +297,30 @@ class SignTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select all required files."
             )
+            self.logger.log_warning("Missing required file selections")
+            return
+        
+        # Validate that all paths exist
+        try:
+            if not Path(doc_path).exists():
+                raise FileNotFoundError(f"Document not found: {doc_path}")
+            if not Path(key_path).exists():
+                raise FileNotFoundError(f"Private key not found: {key_path}")
+            if not Path(cert_path).exists():
+                raise FileNotFoundError(f"Certificate not found: {cert_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "File Not Found", str(e))
+            self.logger.log_error(str(e))
             return
 
-        self.status.setText("Signing... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Starting signature on: {Path(doc_path).name}")
+        self.logger.log_progress("Loading certificate...")
+        self.logger.log_progress("Loading private key...")
+        self.logger.log_progress("Computing signature...")
+        self.logger.log_progress("Creating envelope...")
 
         def sign_op():
+            # Don't call logger from worker thread - it causes GUI thread issues
             return self.service.sign(
                 Path(doc_path),
                 Path(key_path),
@@ -244,19 +331,19 @@ class SignTab(QWidget):
 
         thread = WorkerThread(sign_op, parent=self)
         thread.success.connect(
-            lambda msg: self._on_success(
-                f"Document signed successfully!\nSaved to: {output_path}"
-            )
+            lambda msg: self._on_sign_success(output_path)
         )
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: self._set_ready("Ready to sign documents"))
+        thread.error.connect(self._on_sign_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_success(self, message: str):
-        """Handle successful operation."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #27ae60; padding: 10px;")
-        QMessageBox.information(self, "Success", message)
+    def _on_sign_success(self, output_path: str):
+        """Handle successful signing."""
+        self.logger.log_success(f"✓ Document signed successfully!")
+        self.logger.log_success(f"✓ Saved to: {output_path}")
+        file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+        self.logger.log_success(f"✓ File size: {file_size:,} bytes")
+        QMessageBox.information(self, "Success", f"Document signed successfully!\n\nSaved to: {output_path}")
         # Reset form
         self.document_path.setText("")
         self.key_path.setText("")
@@ -264,16 +351,10 @@ class SignTab(QWidget):
         self.output_path.setText("")
         self.description.clear()
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
+    def _on_sign_error(self, error: str):
+        """Handle signing error."""
+        self.logger.log_error(error.replace("Error: ", ""))
         QMessageBox.critical(self, "Error", error)
-
-    def _set_ready(self, message: str) -> None:
-        """Reset status label to a ready state."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
 
 
 class VerifyTab(QWidget):
@@ -282,7 +363,54 @@ class VerifyTab(QWidget):
     def __init__(self):
         super().__init__()
         self.service = GUIDocSealService()
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo signed file in demo mode."""
+        try:
+            # Look for .signed.dseal files (signed only, not signed-encrypted)
+            docs_dir = Path('data/documents')
+            if docs_dir.exists():
+                signed_files = list(docs_dir.glob('*.signed.dseal'))
+                if signed_files:
+                    self.envelope_path.setText(str(signed_files[0]))
+                else:
+                    # Fall back to any .dseal file if no .signed.dseal exists
+                    dseal_files = list(docs_dir.glob('*.dseal'))
+                    if dseal_files:
+                        self.envelope_path.setText(str(dseal_files[0]))
+            
+            # Auto-load certificate
+            certs_dir = Path('data/certs')
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    # Store for later use in verify
+                    self.trusted_cert = str(certs[0])
+        except Exception:
+            pass
 
     def init_ui(self):
         """Initialize the UI."""
@@ -313,17 +441,20 @@ class VerifyTab(QWidget):
         verify_btn.clicked.connect(self._verify)
         layout.addWidget(verify_btn)
 
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
+
         # Results
         self.results = QTextEdit()
         self.results.setReadOnly(True)
-        self.results.setMinimumHeight(200)
-        layout.addWidget(QLabel("Verification Results:"))
+        self.results.setMinimumHeight(150)
+        layout.addWidget(QLabel("Detailed Results:"))
         layout.addWidget(self.results)
 
-        # Status
+        # Status (deprecated - using logger instead)
         self.status = QLabel("Ready to verify signatures")
         self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -359,38 +490,57 @@ class VerifyTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select the envelope to verify."
             )
+            self.logger.log_warning("No envelope file selected")
+            return
+        
+        # Validate that the path exists
+        try:
+            if not Path(env_path).exists():
+                raise FileNotFoundError(f"Envelope file not found: {env_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "File Not Found", str(e))
+            self.logger.log_error(str(e))
             return
 
-        self.status.setText("Verifying... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Verifying signature of: {Path(env_path).name}")
+        self.logger.log_progress("Reading signed envelope...")
+        self.logger.log_progress("Extracting signature...")
+        self.logger.log_progress("Validating certificate chain...")
+        self.logger.log_progress("Computing document hash...")
+        self.logger.log_progress("Verifying signature...")
         self.results.clear()
 
         def verify_op():
+            # Don't call logger from worker thread - causes GUI thread access violations
             result = self.service.verify(Path(env_path))
             return result
 
         thread = WorkerThread(verify_op, parent=self)
         thread.success.connect(self._display_results)
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: None)
+        thread.error.connect(self._on_verify_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
     def _display_results(self, result_str: str):
         """Display verification results."""
         try:
-
-            # Parse and display the result
             self.results.setText(result_str)
-            self.status.setText("Signature is valid")
-            self.status.setStyleSheet("color: #27ae60; padding: 10px;")
+            self.logger.log_success("✓ Signature verification completed!")
+            self.logger.log_success("✓ Signature is VALID ✓ Document is AUTHENTIC")
         except Exception as e:
-            self._on_error(str(e))
+            self._on_verify_error(str(e))
 
-    def _on_error(self, error: str):
+    def _on_verify_error(self, error: str):
         """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
+        self.logger.log_error(error.replace("Error: ", ""))
         self.results.setText(error)
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.envelope_path.setText("")
+        self.cert_path.setText("")
+        self.trusted_cert = None
+        self.results.setText("")
 
 
 class EncryptTab(QWidget):
@@ -399,7 +549,55 @@ class EncryptTab(QWidget):
     def __init__(self):
         super().__init__()
         self.service = GUIDocSealService()
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo files in demo mode."""
+        try:
+            from .demo_mode import DemoSetup
+            demo = DemoSetup()
+            result = demo.enable_demo_mode()
+            
+            # Auto-load sample document
+            if result.get('sample_document'):
+                self.document_path.setText(result['sample_document'])
+            
+            # Auto-load recipient certificate
+            certs_dir = Path('data/certs')
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    self.cert_path.setText(str(certs[0]))
+            
+            # Auto-generate output path
+            if self.document_path.text():
+                doc_path = Path(self.document_path.text())
+                output = doc_path.parent / f"{doc_path.stem}.encrypted.dseal"
+                self.output_path.setText(str(output))
+        except Exception:
+            pass
 
     def init_ui(self):
         """Initialize the UI."""
@@ -434,10 +632,9 @@ class EncryptTab(QWidget):
         encrypt_btn.clicked.connect(self._encrypt)
         layout.addWidget(encrypt_btn)
 
-        # Status
-        self.status = QLabel("Ready to encrypt documents")
-        self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -490,41 +687,61 @@ class EncryptTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select all required files."
             )
+            self.logger.log_warning("Missing required file selections")
+            return
+        
+        # Validate that all paths exist
+        try:
+            if not Path(doc_path).exists():
+                raise FileNotFoundError(f"Document not found: {doc_path}")
+            if not Path(cert_path).exists():
+                raise FileNotFoundError(f"Certificate not found: {cert_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "File Not Found", str(e))
+            self.logger.log_error(str(e))
             return
 
-        self.status.setText("Encrypting... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Starting encryption of: {Path(doc_path).name}")
+        self.logger.log_progress("Reading document...")
+        self.logger.log_progress("Encrypting with AES-256...")
+        self.logger.log_progress("Creating envelope...")
 
         def encrypt_op():
+            # Don't call logger from worker thread - causes GUI thread access violations
             return self.service.encrypt(
                 Path(doc_path), Path(cert_path), Path(output_path)
             )
 
         thread = WorkerThread(encrypt_op, parent=self)
         thread.success.connect(
-            lambda: self._on_success(
-                f"Document encrypted successfully!\nSaved to: {output_path}"
-            )
+            lambda: self._on_encrypt_success(output_path)
         )
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: None)
+        thread.error.connect(self._on_encrypt_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_success(self, message: str):
-        """Handle successful operation."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #27ae60; padding: 10px;")
-        QMessageBox.information(self, "Success", message)
+    def _on_encrypt_success(self, output_path: str):
+        """Handle successful encryption."""
+        self.logger.log_success("✓ Document encrypted successfully!")
+        self.logger.log_success(f"✓ Saved to: {output_path}")
+        file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+        self.logger.log_success(f"✓ File size: {file_size:,} bytes")
+        QMessageBox.information(self, "Success", f"Document encrypted successfully!\n\nSaved to: {output_path}")
         # Reset form
         self.document_path.setText("")
         self.cert_path.setText("")
         self.output_path.setText("")
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
+    def _on_encrypt_error(self, error: str):
+        """Handle encryption error."""
+        self.logger.log_error(error.replace("Error: ", ""))
         QMessageBox.critical(self, "Error", error)
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.document_path.setText("")
+        self.cert_path.setText("")
+        self.output_path.setText("")
 
 
 class DecryptTab(QWidget):
@@ -535,7 +752,60 @@ class DecryptTab(QWidget):
         self.service = GUIDocSealService()
         self.ca_manager = ca_manager
         self.use_ca_checkbox: Optional[QCheckBox] = None
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo encrypted file in demo mode."""
+        try:
+            # Look for .encrypted.dseal files (encrypted only, not signed-encrypted)
+            docs_dir = Path('data/documents')
+            if docs_dir.exists():
+                # Prioritize .encrypted.dseal over .signed-encrypted.dseal
+                encrypted_files = list(docs_dir.glob('*encrypted*.dseal'))
+                if encrypted_files:
+                    # Sort to prefer .encrypted.dseal over .signed-encrypted.dseal
+                    encrypted_files.sort(key=lambda p: (
+                        'signed-encrypted' in str(p),  # signed-encrypted last
+                        str(p)  # then alphabetically
+                    ))
+                    self.envelope_path.setText(str(encrypted_files[0]))
+            
+            # Auto-load private key
+            keys_dir = Path('data/keys')
+            if keys_dir.exists():
+                keys = sorted(keys_dir.glob('*.pem'))
+                if keys:
+                    self.key_path.setText(str(keys[0]))
+            
+            # Auto-generate output path
+            if self.envelope_path.text():
+                env_path = Path(self.envelope_path.text())
+                output = env_path.parent / f"{env_path.stem}.decrypted"
+                self.output_path.setText(str(output))
+        except Exception:
+            pass
 
     def init_ui(self):
         """Initialize the UI."""
@@ -582,10 +852,9 @@ class DecryptTab(QWidget):
         decrypt_btn.clicked.connect(self._decrypt)
         layout.addWidget(decrypt_btn)
 
-        # Status
-        self.status = QLabel("Ready to decrypt documents")
-        self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -634,24 +903,38 @@ class DecryptTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select all required files."
             )
+            self.logger.log_warning("Missing required file selections")
+            return
+        
+        # Validate that all paths exist
+        try:
+            if not Path(env_path).exists():
+                raise FileNotFoundError(f"Envelope file not found: {env_path}")
+            if not Path(key_path).exists():
+                raise FileNotFoundError(f"Private key not found: {key_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "File Not Found", str(e))
+            self.logger.log_error(str(e))
             return
 
-        self.status.setText("Decrypting... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Starting decryption of: {Path(env_path).name}")
+        self.logger.log_progress(f"Loading private key: {Path(key_path).name}")
+        self.logger.log_progress("Reading encrypted envelope...")
+        self.logger.log_progress("Decrypting with AES-256...")
+        self.logger.log_progress("Extracting document...")
 
         def decrypt_op():
+            # Don't call logger from worker thread - causes GUI thread access violations
             return self.service.decrypt(
                 Path(env_path), Path(key_path), Path(output_path)
             )
 
         thread = WorkerThread(decrypt_op, parent=self)
         thread.success.connect(
-            lambda: self._on_success(
-                f"Document decrypted successfully!\nSaved to: {output_path}"
-            )
+            lambda: self._on_decrypt_success(output_path)
         )
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: None)
+        thread.error.connect(self._on_decrypt_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
     def _toggle_ca_usage(self):
@@ -671,21 +954,28 @@ class DecryptTab(QWidget):
             self.key_path.setReadOnly(False)
             self.key_path.clear()
 
-    def _on_success(self, message: str):
-        """Handle successful operation."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #27ae60; padding: 10px;")
-        QMessageBox.information(self, "Success", message)
+    def _on_decrypt_success(self, output_path: str):
+        """Handle successful decryption."""
+        self.logger.log_success("✓ Document decrypted successfully!")
+        self.logger.log_success(f"✓ Saved to: {output_path}")
+        file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+        self.logger.log_success(f"✓ File size: {file_size:,} bytes")
+        QMessageBox.information(self, "Success", f"Document decrypted successfully!\n\nSaved to: {output_path}")
         # Reset form
         self.envelope_path.setText("")
         self.key_path.setText("")
         self.output_path.setText("")
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
+    def _on_decrypt_error(self, error: str):
+        """Handle decryption error."""
+        self.logger.log_error(error.replace("Error: ", ""))
         QMessageBox.critical(self, "Error", error)
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.envelope_path.setText("")
+        self.key_path.setText("")
+        self.output_path.setText("")
 
 
 class SignEncryptTab(QWidget):
@@ -696,7 +986,80 @@ class SignEncryptTab(QWidget):
         self.service = GUIDocSealService()
         self.ca_manager = ca_manager
         self.use_ca_checkbox: Optional[QCheckBox] = None
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo files in demo mode."""
+        try:
+            from .demo_mode import DemoSetup
+            demo = DemoSetup()
+            result = demo.enable_demo_mode()
+            
+            # Auto-load sample document
+            if result.get('sample_document'):
+                self.document_path.setText(result['sample_document'])
+            
+            # Auto-load signer certificate and key
+            certs_dir = Path('data/certs')
+            keys_dir = Path('data/keys')
+            
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    self.cert_path.setText(str(certs[0]))
+            
+            if keys_dir.exists():
+                keys = sorted(keys_dir.glob('*.pem'))
+                if keys:
+                    self.key_path.setText(str(keys[0]))
+            
+            # Auto-load recipient certificate
+            # IMPORTANT: Use the SAME cert as signer to ensure decrypt matches encrypt
+            # In demo mode, both signer and recipient use the same certificate
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    # Use first cert for BOTH signer and recipient
+                    self.recipient_cert_path.setText(str(certs[0]))
+            
+            # Auto-generate output path
+            if self.document_path.text():
+                doc_path = Path(self.document_path.text())
+                output = doc_path.parent / f"{doc_path.stem}.signed-encrypted.dseal"
+                self.output_path.setText(str(output))
+        except Exception:
+            pass
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.document_path.setText("")
+        self.key_path.setText("")
+        self.cert_path.setText("")
+        self.recipient_cert_path.setText("")
+        self.output_path.setText("")
+        self.description.clear()
 
     def init_ui(self):
         """Initialize the UI."""
@@ -775,10 +1138,9 @@ class SignEncryptTab(QWidget):
         sign_encrypt_btn.clicked.connect(self._sign_encrypt)
         layout.addWidget(sign_encrypt_btn)
 
-        # Status
-        self.status = QLabel("Ready to sign and encrypt documents")
-        self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -834,12 +1196,18 @@ class SignEncryptTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select all required files."
             )
+            self.logger.log_warning("Missing required file selections")
             return
 
-        self.status.setText("Signing and encrypting... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Starting sign & encrypt of: {Path(doc_path).name}")
+        self.logger.log_progress("Loading signer private key...")
+        self.logger.log_progress("Computing signature...")
+        self.logger.log_progress("Loading recipient certificate...")
+        self.logger.log_progress("Encrypting with AES-256...")
+        self.logger.log_progress("Creating signed+encrypted envelope...")
 
         def sign_encrypt_op():
+            # Don't call logger from worker thread - causes GUI thread access violations
             return self.service.sign_encrypt(
                 Path(doc_path),
                 Path(key_path),
@@ -851,12 +1219,10 @@ class SignEncryptTab(QWidget):
 
         thread = WorkerThread(sign_encrypt_op, parent=self)
         thread.success.connect(
-            lambda: self._on_success(
-                f"Document signed and encrypted successfully!\nSaved to: {output_path}"
-            )
+            lambda: self._on_sign_encrypt_success(output_path)
         )
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: None)
+        thread.error.connect(self._on_sign_encrypt_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
     def _toggle_ca_usage(self):
@@ -880,11 +1246,13 @@ class SignEncryptTab(QWidget):
             self.key_path.clear()
             self.cert_path.clear()
 
-    def _on_success(self, message: str):
-        """Handle successful operation."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #27ae60; padding: 10px;")
-        QMessageBox.information(self, "Success", message)
+    def _on_sign_encrypt_success(self, output_path: str):
+        """Handle successful sign+encrypt."""
+        self.logger.log_success("✓ Document signed AND encrypted successfully!")
+        self.logger.log_success(f"✓ Saved to: {output_path}")
+        file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+        self.logger.log_success(f"✓ File size: {file_size:,} bytes")
+        QMessageBox.information(self, "Success", f"Document signed and encrypted successfully!\n\nSaved to: {output_path}")
         # Reset form
         self.document_path.setText("")
         self.key_path.setText("")
@@ -893,11 +1261,19 @@ class SignEncryptTab(QWidget):
         self.output_path.setText("")
         self.description.clear()
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
+    def _on_sign_encrypt_error(self, error: str):
+        """Handle sign+encrypt error."""
+        self.logger.log_error(error.replace("Error: ", ""))
         QMessageBox.critical(self, "Error", error)
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.document_path.setText("")
+        self.key_path.setText("")
+        self.cert_path.setText("")
+        self.recipient_cert_path.setText("")
+        self.output_path.setText("")
+        self.description.clear()
 
 
 class DecryptVerifyTab(QWidget):
@@ -908,7 +1284,66 @@ class DecryptVerifyTab(QWidget):
         self.service = GUIDocSealService()
         self.ca_manager = ca_manager
         self.use_ca_checkbox: Optional[QCheckBox] = None
+        self.demo_mode = False
         self.init_ui()
+        self._check_demo_mode()
+    
+    def _check_demo_mode(self):
+        """Check if demo mode is enabled and auto-load files."""
+        try:
+            from pathlib import Path
+            import json
+            
+            # Only enable demo if .demo_config exists AND demo_mode is explicitly True
+            config_file = Path("data") / ".demo_config"
+            if config_file.exists():
+                try:
+                    config = json.loads(config_file.read_text())
+                    # Only proceed if demo_mode is explicitly True (not just present)
+                    if config.get("demo_mode") is True:
+                        self.demo_mode = True
+                        self._auto_load_demo_files()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    def _auto_load_demo_files(self):
+        """Auto-load demo signed-encrypted file in demo mode."""
+        try:
+            # Look for .signed-encrypted.dseal files specifically
+            docs_dir = Path('data/documents')
+            if docs_dir.exists():
+                signed_encrypted_files = list(docs_dir.glob('*signed-encrypted*.dseal'))
+                if signed_encrypted_files:
+                    self.envelope_path.setText(str(signed_encrypted_files[0]))
+                else:
+                    # Fall back to any .dseal file if specific one doesn't exist
+                    dseal_files = list(docs_dir.glob('*.dseal'))
+                    if dseal_files:
+                        self.envelope_path.setText(str(dseal_files[0]))
+            
+            # Auto-load private key
+            keys_dir = Path('data/keys')
+            if keys_dir.exists():
+                keys = sorted(keys_dir.glob('*.pem'))
+                if keys:
+                    self.key_path.setText(str(keys[0]))
+            
+            # Auto-load trusted certificate (signer's cert)
+            certs_dir = Path('data/certs')
+            if certs_dir.exists():
+                certs = sorted(certs_dir.glob('*.pem'))
+                if certs:
+                    self.trusted_cert_path.setText(str(certs[0]))
+            
+            # Auto-generate output path
+            if self.envelope_path.text():
+                env_path = Path(self.envelope_path.text())
+                output = env_path.parent / f"{env_path.stem}.decrypted"
+                self.output_path.setText(str(output))
+        except Exception:
+            pass
 
     def init_ui(self):
         """Initialize the UI."""
@@ -969,13 +1404,12 @@ class DecryptVerifyTab(QWidget):
         decrypt_verify_btn.clicked.connect(self._decrypt_verify)
         layout.addWidget(decrypt_verify_btn)
 
-        # Status
-        self.status = QLabel("Ready to decrypt and verify documents")
-        self.status.setStyleSheet("color: #7f8c8d; padding: 10px;")
-        layout.addWidget(self.status)
+        # Logger widget
+        self.logger = LoggerWidget()
+        layout.addWidget(self.logger)
 
         # Verification result
-        result_group = QGroupBox("Verification Result:")
+        result_group = QGroupBox("Detailed Result:")
         result_layout = QVBoxLayout()
         self.result_display = QTextEdit()
         self.result_display.setReadOnly(True)
@@ -1032,12 +1466,19 @@ class DecryptVerifyTab(QWidget):
             QMessageBox.warning(
                 self, "Missing Input", "Please select all required files."
             )
+            self.logger.log_warning("Missing required file selections")
             return
 
-        self.status.setText("Decrypting and verifying... please wait")
-        self.status.setStyleSheet("color: #f39c12; padding: 10px;")
+        self.logger.log_info(f"Starting decrypt & verify of: {Path(env_path).name}")
+        self.logger.log_progress(f"Loading private key: {Path(key_path).name}")
+        self.logger.log_progress("Reading signed+encrypted envelope...")
+        self.logger.log_progress("Decrypting with AES-256...")
+        self.logger.log_progress("Extracting signature...")
+        self.logger.log_progress("Validating certificate chain...")
+        self.logger.log_progress("Verifying signature...")
 
         def decrypt_verify_op():
+            # Don't call logger from worker thread - causes GUI thread access violations
             return self.service.decrypt_and_verify(
                 Path(env_path),
                 Path(key_path),
@@ -1047,35 +1488,42 @@ class DecryptVerifyTab(QWidget):
 
         thread = WorkerThread(decrypt_verify_op, parent=self)
         thread.success.connect(
-            lambda: self._on_success(
-                f"Document decrypted and verified successfully!\nSaved "
-                f"to: {output_path}"
-            )
+            lambda: self._on_decrypt_verify_success(output_path)
         )
-        thread.error.connect(self._on_error)
-        thread.finished.connect(lambda: None)
+        thread.error.connect(self._on_decrypt_verify_error)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_success(self, message: str):
-        """Handle successful operation."""
-        self.status.setText(message)
-        self.status.setStyleSheet("color: #27ae60; padding: 10px;")
+    def _on_decrypt_verify_success(self, output_path: str):
+        """Handle successful decrypt+verify."""
+        self.logger.log_success("✓ Document decrypted successfully!")
+        self.logger.log_success("✓ Signature verified successfully!")
+        self.logger.log_success(f"✓ Saved to: {output_path}")
+        file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+        self.logger.log_success(f"✓ File size: {file_size:,} bytes")
         self.result_display.setText(
-            "Signature verification PASSED\nDocument is authentic and unmodified."
+            "✓ Document DECRYPTED\n✓ Signature VALID\n✓ Document is AUTHENTIC and UNMODIFIED"
         )
-        QMessageBox.information(self, "Success", message)
+        QMessageBox.information(self, "Success", f"Document decrypted and verified successfully!\n\nSaved to: {output_path}")
         # Reset form
         self.envelope_path.setText("")
         self.key_path.setText("")
         self.output_path.setText("")
         self.trusted_cert_path.setText("")
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.status.setText(error)
-        self.status.setStyleSheet("color: #e74c3c; padding: 10px;")
-        self.result_display.setText(f"✗ Verification FAILED\n{error}")
+    def _on_decrypt_verify_error(self, error: str):
+        """Handle decrypt+verify error."""
+        self.logger.log_error(error.replace("Error: ", ""))
+        self.result_display.setText(f"✗ FAILED\n{error.replace('Error: ', '')}")
         QMessageBox.critical(self, "Error", error)
+    
+    def _clear_fields(self):
+        """Clear all form fields when demo mode is disabled."""
+        self.envelope_path.setText("")
+        self.key_path.setText("")
+        self.trusted_cert_path.setText("")
+        self.output_path.setText("")
+        self.result_display.setText("")
 
     def _toggle_ca_usage(self):
         """Auto-fill private key from CA if available."""

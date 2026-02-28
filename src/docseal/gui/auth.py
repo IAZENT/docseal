@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+from .user_database import PersistentUserDatabase
 
 
 @dataclass
@@ -19,18 +22,15 @@ class User:
 class AuthenticationManager:
     """Manages user authentication and sessions."""
 
-    def __init__(self):
-        """Initialize the authentication manager."""
+    def __init__(self, db_path: Optional[Path] = None):
+        """
+        Initialize the authentication manager.
+
+        Args:
+            db_path: Path to user database file
+        """
         self.current_user: Optional[User] = None
-        self.users_db: dict[str, dict] = {
-            # Default admin user (password: admin123)
-            "admin": {
-                "password_hash": "pbkdf2:sha256:600000$gNnhxlhFZp5wvLnJ$",
-                "role": "admin",
-                "email": "admin@docseal.local",
-                "organization": "DocSeal System",
-            }
-        }
+        self.db = PersistentUserDatabase(db_path)
 
     def login(self, username: str, password: str) -> tuple[bool, str]:
         """
@@ -43,14 +43,19 @@ class AuthenticationManager:
         Returns:
             Tuple of (success, message)
         """
-        if username not in self.users_db:
+        if not self.db.user_exists(username):
             return False, "User not found"
 
-        user_info = self.users_db[username]
-
-        # Simple password verification (in production, use proper hashing)
-        if not self._verify_password(password, user_info["password_hash"]):
+        if not self.db.verify_password(username, password):
             return False, "Invalid password"
+
+        # Get user info from database
+        user_info = self.db.get_user(username)
+        if not user_info:
+            return False, "Failed to retrieve user information"
+
+        # Update last login
+        self.db.update_last_login(username)
 
         # Create user session
         self.current_user = User(
@@ -94,36 +99,20 @@ class AuthenticationManager:
         if not self.current_user or self.current_user.role != "admin":
             return False, "Only administrators can create users"
 
-        if username in self.users_db:
-            return False, "User already exists"
-
-        if role not in ["admin", "operator", "auditor"]:
-            return False, "Invalid role"
-
-        password_hash = self._hash_password(password)
-        self.users_db[username] = {
-            "password_hash": password_hash,
-            "role": role,
-            "email": email,
-            "organization": organization,
-        }
-
-        return True, f"User {username} created successfully"
+        return self.db.create_user(username, password, role, email, organization)
 
     def _hash_password(self, password: str) -> str:
-        """Hash a password (simplified for demo)."""
-        # In production, use werkzeug.security.generate_password_hash
-        import hashlib
-
-        return hashlib.sha256(password.encode()).hexdigest()
+        """Hash a password."""
+        import bcrypt
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
     def _verify_password(self, password: str, password_hash: str) -> bool:
         """Verify a password against its hash."""
-        # Simplified verification
-        return (
-            self._hash_password(password) == password_hash
-            or password_hash == "pbkdf2:sha256:600000$gNnhxlhFZp5wvLnJ$"  # noqa: S105
-        )
+        import bcrypt
+        try:
+            return bcrypt.checkpw(password.encode(), password_hash.encode())
+        except Exception:
+            return False
 
     def can_perform_action(self, action: str) -> bool:
         """Check if current user can perform an action."""

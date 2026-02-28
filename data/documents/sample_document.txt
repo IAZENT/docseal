@@ -1,0 +1,17 @@
+ACADEMIC TRANSCRIPT
+        
+Institution: Demo University
+Student: John Doe
+Student ID: 20241001
+Date: 2024-01-15
+
+Courses Completed:
+- Cryptography (A)
+- Network Security (A-)
+- Database Systems (A)
+- Software Engineering (B+)
+
+GPA: 3.85
+Status: Good Standing
+
+This is a sample document for demonstration purposes.

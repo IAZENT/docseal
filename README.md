@@ -3,29 +3,95 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg)](#)
+[![Demo Mode](https://img.shields.io/badge/Demo%20Mode-Enabled-green.svg)](#demo-mode)
 
-Comprehensive cryptographic solution for secure signing, encryption, and verification of academic documents. Production-ready GUI (PyQt6) and CLI with full-featured CA system. See [pyproject.toml](pyproject.toml) for current version.
+Comprehensive cryptographic solution for secure signing, encryption, and verification of academic documents. **Production-ready GUI** (PyQt6) with automated demo mode, full-featured CLI, and complete CA system.
 
-**Quick Links**: [Installation](#installation) | [GUI Guide](#gui-guide) | [CLI Commands](#cli-reference) | [Python API](#python-api) | [Security](#security) | [Architecture](#architecture)
+**Key Highlights**: 🔐 RSA-2048 + AES-256-GCM | 📋 6 operation tabs with auto-load | 🚀 **Demo Mode automation** | 🏛️ Full CA with revocation | 🎨 Dark/Light themes | ⚡ Zero-config quick start
+
+**Quick Links**: [Installation](#installation) | [GUI Guide](#gui-guide) | [Demo Mode](#demo-mode) | [CLI Commands](#cli-reference) | [Python API](#python-api) | [Security](#security)
 
 ---
 
 ## Features
 
-**Core**: RSA-PSS-SHA256 signing | AES-256-GCM encryption | Two-layer operations (sign+encrypt/decrypt+verify) | Tamper detection | Full CA system with revocation | Audit logging | X.509 certificates
+✅ **Core Operations**:
+- RSA-PSS-SHA256 signing with proof of authenticity
+- AES-256-GCM encryption with integrity verification
+- Two-layer operations: Sign+Encrypt and Decrypt+Verify
+- Tamper detection with forensic evidence
+- Certificate Authority system with revocation (CRL)
+- Audit logging for compliance
 
-**Interfaces**: 
-- **GUI** (PyQt6): 6 operation tabs (Sign, Verify, Encrypt, Decrypt, Sign+Encrypt, Decrypt+Verify), CA management with dark/light themes
-- **CLI**: 10+ commands with argparse, batch automation support
-- **Python API**: DocSealService for programmatic use
+✅ **GUI (PyQt6)**:
+- **6 Operation Tabs**: Sign | Verify | Encrypt | Decrypt | Sign+Encrypt | Decrypt+Verify
+- **Demo Mode**: One-click setup with automatic file/certificate population
+- **CA Management**: Initialize CA, issue certificates, manage revocation, view audit logs
+- **Themes**: Toggle between light and dark modes
+- **Real-time Feedback**: Progress messages, success/error notifications
+- **Intelligent File Loading**: Auto-detects file types (signed, encrypted, signed-encrypted)
 
-**Format**: `.dseal` (ZIP-based with JSON metadata, plaintext/ciphertext payload, signatures, certificates)
+✅ **CLI** (10+ commands):
+- Full command-line interface with argparse
+- Batch automation support
+- CA management commands
+- Verbose output and error handling
 
-**Security**: RSA-2048, AES-256-GCM, PBKDF2 key derivation, certificate validation, CRL checking, audit trails
+✅ **Python API**:
+- `DocSealService` for programmatic access
+- Full-featured cryptographic operations
+- Certificate and key management
+
+✅ **File Format**: 
+- `.dseal` (ZIP-based) with JSON metadata, payload, signatures, certificates
+- Tamper-proof with cryptographic verification
+
+✅ **Security**:
+- RSA-2048 asymmetric keys
+- AES-256-GCM authenticated encryption
+- PBKDF2 key derivation
+- X.509 certificate validation
+- CRL revocation checking
+- Forensic audit trails
 
 ---
 
-## Installation
+## Demo Mode
+
+**What is Demo Mode?**
+
+Demo Mode is a one-click setup feature that fully automates DocSeal for testing and demonstration. When enabled, the GUI automatically:
+- ✅ Loads sample certificates and keys
+- ✅ Populates all input/output fields
+- ✅ Pre-selects correct file types for each operation
+- ✅ Clears fields when disabled for clean state
+
+**How to Use Demo Mode**:
+
+1. Launch GUI: `docseal-gui`
+2. Click **"Enable Demo Mode"** button (top toolbar or menu)
+3. Navigate to any operation tab (Sign, Encrypt, etc.)
+4. All fields auto-populate with demo data → Just click the operation button!
+5. Output files automatically save to `data/` directory
+6. Click **"Disable Demo Mode"** when finished
+
+**Demo Mode Features**:
+- Automatic file discovery by operation type
+- Pre-populated certificates and keys from `data/certs/` and `data/keys/`
+- One-click document processing (no manual selections)
+- Real-time demo status indicator
+- Field clearing on disable for fresh start
+
+**Example Demo Workflow**:
+```
+GUI starts → Click "Enable Demo Mode" 
+→ Go to "Sign+Encrypt" tab → Fields auto-populate
+→ Click "Sign & Encrypt" → Output saved to data/
+→ Go to "Decrypt+Verify" tab → Files auto-load
+→ Click "Decrypt & Verify" → Success!
+```
+
+**Perfect for**: Demonstrations | Testing workflows | Training | Quick evaluation | CI/CD pipelines
 
 **Requirements**: Python 3.11+ | OpenSSL dev headers | Linux/macOS/Windows
 
@@ -49,25 +115,50 @@ docseal --help && docseal-gui
 
 ## Quick Start
 
-### GUI (Recommended)
+### 🚀 GUI (Recommended — 30 seconds)
+
+**Option 1: Demo Mode (Fastest — Zero Configuration)**
 ```bash
 docseal-gui
+# Click "Enable Demo Mode" button → Select any tab → Click operation → Done!
+# All fields auto-populate with demo data, files auto-load
 ```
-Navigate: **CA Tab** → Init CA → Issue Certificate → Use Sign/Verify/Encrypt/Decrypt tabs. All intuitive with real-time feedback, dark/light theme support.
 
-### CLI
+**Option 2: Manual Setup**
 ```bash
-docseal ca init                                              # Initialize CA (prompts for password)
-docseal ca issue --name "Alice" --role "Registrar"          # Issue certificate
-docseal sign --input doc.pdf --cert alice.p12 --output doc.dseal    # Sign
-docseal verify --envelope doc.dseal --verbose               # Verify
-docseal encrypt --input secret.pdf --cert recipient.pem --output secret.dseal
-docseal decrypt --envelope secret.dseal --key recipient_key.pem
-docseal ca list                                              # Show revoked certs
-docseal ca revoke --serial <num> --reason "compromised"     # Revoke cert
+docseal-gui
+# Navigate: **CA Tab** → Init CA → Issue Certificate → Use Sign/Verify/Encrypt/Decrypt tabs
 ```
 
-### Python API
+### CLI (Quick Reference)
+
+```bash
+# Initialize CA (one-time setup)
+docseal ca init                                              
+
+# Issue certificate for a user
+docseal ca issue --name "Alice" --role "Registrar" --valid-days 365
+
+# Sign a document
+docseal sign --input document.pdf --cert alice.p12 --output document.dseal
+
+# Verify signature
+docseal verify --envelope document.dseal --verbose
+
+# Encrypt for secure sharing
+docseal encrypt --input secret.pdf --cert recipient.pem --output secret.dseal
+
+# Decrypt and verify (two-layer)
+docseal decrypt --envelope secret.dseal --key recipient_key.pem
+docseal decrypt-verify --envelope secure.dseal --key key.pem --signer-cert signer.pem
+
+# Manage revocation
+docseal ca list                                              # View revoked certs
+docseal ca revoke --serial <number> --reason "compromised"  # Revoke cert
+```
+
+### Python API (Programmatic Use)
+
 ```python
 from docseal.core.service import DocSealService
 from docseal.core.envelope import DsealEnvelope
@@ -76,51 +167,69 @@ from cryptography.hazmat.primitives import serialization
 
 service = DocSealService()
 
-# Load keys/certs
+# Load certificates and keys
 with open('key.pem', 'rb') as f:
     key = serialization.load_pem_private_key(f.read(), password=None)
 with open('cert.pem', 'rb') as f:
     cert = x509.load_pem_x509_certificate(f.read())
 
-# Sign
+# Sign document
 envelope = service.sign(b"document content", key, cert, description="Transcript")
 with open('out.dseal', 'wb') as f:
     f.write(envelope.to_bytes())
 
-# Verify
+# Verify signature
 loaded = DsealEnvelope.from_bytes(open('out.dseal', 'rb').read())
 result = service.verify(loaded, [cert])
-print(f"Valid: {result.is_valid}, Signer: {result.signer_name}")
-
-# Encrypt
-encrypted = service.encrypt(b"confidential", recipient_cert, "Enrollment")
-
-# Decrypt+Verify (two-layer)
-signed_encrypted = service.sign_encrypt(b"doc", key, cert, recipient_cert)
-decrypted, verify_result = service.decrypt_and_verify(signed_encrypted, recipient_key, [cert])
+if result.is_valid:
+    print(f"✓ Valid signature from {result.signer_name}")
 ```
 
 ---
 
 ## GUI Guide
 
-| Tab | Purpose | Steps |
-|-----|---------|-------|
-| **Sign** | Create signatures | Select doc → Choose cert (.p12) → Enter password → Click Sign → Save .dseal |
-| **Verify** | Check authenticity | Select .dseal → Optionally add signer cert → Click Verify → View results (signer, timestamp, validity) |
-| **Encrypt** | Secure sharing | Select doc → Choose recipient cert → Click Encrypt → Save .dseal |
-| **Decrypt** | Unlock encrypted docs | Select .dseal → Choose your private cert → Enter password → Click Decrypt → Save plaintext |
-| **Sign+Encrypt** | Confidential + authenticated | Doc → Your cert (sign) → Recipient cert (encrypt) → Click Sign & Encrypt |
-| **Decrypt+Verify** | One-step auth + decrypt | .dseal → Your private cert → Signer cert → Click Decrypt & Verify → View results + plaintext |
+**How to Use the GUI**:
 
-**CA Sub-tabs**: 
-- **Init CA**: Set CA password (8+ chars) → Creates keypair/self-signed cert
-- **Issue Cert**: Name → Role → Validity days → Password → Generates .p12
-- **Revoke**: Select from dropdown → View details → Reason → Confirm
-- **List**: View all revoked certificates (serial, date, reason)
-- **CA Info**: Display CA certificate details and counts
+1. Launch with `docseal-gui`
+2. Initialize CA: Go to **CA Tabs** → **Init CA** → Set password (8+ chars)
+3. Issue certificates: **CA Tabs** → **Issue Cert** → Enter name/role → Create
+4. Use operation tabs below for signing, encryption, etc.
 
-**Themes**: Menu → Toggle Light/Dark (default: Light)
+**For Faster Demo**: Use **Demo Mode** (see [Demo Mode](#demo-mode) section) for automatic setup!
+
+### Operation Tabs
+
+| Tab | Purpose | Input | Process | Output |
+|-----|---------|-------|---------|--------|
+| **Sign** | Create signature | Document file + .p12 cert | Password → Sign | .signed.dseal |
+| **Verify** | Authenticate | .dseal file (optional: signer cert) | Verify signature + CRL check | Signer name, timestamp, validity |
+| **Encrypt** | Secure sharing | Document + recipient cert | Encrypt with recipient's public key | .encrypted.dseal |
+| **Decrypt** | Unlock encrypted | .dseal file + your private cert | Password → Decrypt with your key | Plaintext document |
+| **Sign+Encrypt** | Confidential & authenticated | Doc + signer cert + recipient cert | Sign then encrypt | .signed-encrypted.dseal |
+| **Decrypt+Verify** | Auth + decrypt | .dseal file + your private cert + signer cert | Decrypt then verify signature | Document + verification result |
+
+**Demo Mode Auto-Loading**:
+- When **Demo Mode** is enabled, fields auto-populate with correct files
+- Each tab intelligently loads appropriate file types:
+  - **Verify Tab**: Loads `.signed.dseal` files
+  - **Decrypt Tab**: Loads `*encrypted*.dseal` files (not signed-encrypted)
+  - **Decrypt+Verify Tab**: Loads `*signed-encrypted*.dseal` files
+  - **Sign+Encrypt Tab**: Loads certificates with matching keys for seamless encryption/decryption
+
+### CA Management Tabs
+
+| Tab | Purpose | Action |
+|-----|---------|--------|
+| **Init CA** | Initialize Certificate Authority | Set password (8+ chars) → Creates keypair & self-signed cert |
+| **Issue Cert** | Issue new certificates | Enter name, role, validity days → Create signed certificate |
+| **Revoke** | Revoke certificates | Select cert from dropdown → Choose reason → Confirm |
+| **List** | View revoked certificates | Display revocation list with dates and reasons |
+| **CA Info** | Authority information | Display CA certificate details and statistics |
+
+### Themes
+- **Toggle Light/Dark Mode**: Menu → Theme selection
+- **Default**: Light theme with dark mode option
 
 ---
 
@@ -380,7 +489,14 @@ python scripts/generate_test_keys.py
 
 ---
 
-## Development
+## Recent Improvements (v1.0)
+
+✅ **Demo Mode Automation**: One-click demo with automatic file/certificate population (v1.0)
+✅ **Intelligent File Loading**: Type-specific auto-detection (.signed.dseal, .encrypted.dseal, .signed-encrypted.dseal)
+✅ **Certificate Matching Fix**: Sign+Encrypt+Decrypt workflow now seamlessly preserves encryption keys
+✅ **Thread Safety**: Eliminated segmentation faults in cryptographic operations
+✅ **Error Recovery**: Graceful handling of deleted UI components
+✅ **UI Polish**: Real-time progress messages, clean field population in demo mode
 
 **Code Quality**:
 ```bash
